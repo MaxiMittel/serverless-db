@@ -1,0 +1,31 @@
+.tableContainer {
+  width: 100%;
+  text-align: center;
+  border-collapse: collapse;
+}
+
+.thead {
+  background-color: var(--joy-palette-background-body);
+  border-radius: 10px;
+  outline: 1px solid var(--joy-palette-background-level2);
+}
+
+.th {
+  font-weight: 600;
+  padding: 15px;
+  user-select: none;
+}
+
+.thead tr:first-child th:first-child {
+  border-bottom-left-radius: 10px;
+  border-top-left-radius: 10px;
+}
+
+.thead tr:first-child th:last-child {
+  border-bottom-right-radius: 10px;
+  border-top-right-radius: 10px;
+}
+
+.tbody td {
+  padding: 15px;
+}

@@ -1,0 +1,6 @@
+.editor {
+  border-radius: 10px;
+  border: 1px solid var(--joy-palette-background-level2);
+  overflow: hidden;
+  margin-block: 10px;
+}

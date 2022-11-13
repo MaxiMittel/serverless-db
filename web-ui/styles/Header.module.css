@@ -1,0 +1,5 @@
+.container {
+  padding: 20px;
+  border-bottom: 1px solid var(--joy-palette-background-level2);
+  background-color: var(--joy-palette-background-body);
+}

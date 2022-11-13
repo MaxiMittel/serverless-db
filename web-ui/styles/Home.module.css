@@ -1,0 +1,9 @@
+.actionRow {
+  padding: 10px;
+  display: flex;
+  justify-content: space-between;
+  background-color: var(--joy-palette-background-body);
+  border-radius: 10px;
+  border: 1px solid var(--joy-palette-background-level2);
+  margin-block: 10px;
+}
