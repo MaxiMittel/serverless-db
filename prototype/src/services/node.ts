@@ -64,67 +64,6 @@ export class Node {
     this.offsetLookupTable[id] = offset;
   }
 
-  public async getItem(
-    table: Table,
-    key: string,
-    projection: string[]
-  ): Promise<Table> {
-    if (!(key in this.offsetLookupTable)) {
-      throw new Error(`Key ${key} does not exist`);
-    }
-
-    const offset = this.offsetLookupTable[key];
-
-    const data = await this.storageService.readBytes(
-      `${this.database.name}/${table}`,
-      offset,
-      this.database.getTableLength(table.name)
-    );
-
-    if (!data) {
-      throw new Error(`Item ${key} does not exist`);
-    }
-
-    const buffer = await this.storageService.streamToBuffer(data);
-
-    let item: { [key: string]: any } = {};
-    let start = 0;
-    for (const key in table.attributes) {
-      const value = table.attributes[key];
-      switch (value.type) {
-        case DatabaseType.VARCHAR:
-          if (!value.length) throw new Error(`Length of ${key} is not defined`);
-          item[key] = buffer
-            .toString("utf8", start, value.length)
-            .replace(/^[\s\uFEFF\xA0\0]+|[\s\uFEFF\xA0\0]+$/g, "");
-          start += value.length;
-          break;
-        case DatabaseType.INT:
-          item[key] = buffer.readInt32BE(start);
-          start += 4;
-          break;
-        default:
-          throw new Error(`Type ${value.type} is not supported`);
-      }
-    }
-
-    if (projection.length === 0) {
-      return {
-        ...table,
-        items: [item],
-      };
-    } else {
-      let projectedItem: { [key: string]: any } = {};
-      for (const key of projection) {
-        projectedItem[key] = item[key];
-      }
-      return {
-        ...table,
-        items: [item],
-      };
-    }
-  }
-
   private async getTable(name: string): Promise<Table> {
     const data = await this.storageService.readObject(
       `${this.database.name}/${name}`
