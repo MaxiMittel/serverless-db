@@ -7,6 +7,7 @@ import {
   Select,
   Update,
 } from "node-sql-parser";
+import { joinThread } from "../workers/join/thread";
 import { Database, DatabaseType, Table } from "./database";
 import { StorageService } from "./storage";
 
@@ -62,6 +63,31 @@ export class Node {
 
   public addOffset(id: string, offset: number) {
     this.offsetLookupTable[id] = offset;
+  }
+
+  public async run(statemnts: AST | AST[]) {
+    if (Array.isArray(statemnts)) {
+      await Promise.all(
+        statemnts.map(async (statement: AST) => await this.run(statement))
+      );
+    } else {
+      return await this.runStatement(statemnts);
+    }
+  }
+
+  public async runStatement(statement: AST) {
+    switch (statement.type) {
+      case "select":
+        return await this.runSelectStatement(statement);
+      case "insert":
+        return await this.runInsertStatement(statement);
+      case "update":
+        return await this.runUpdateStatement(statement);
+      case "delete":
+        return await this.runDeleteStatement(statement);
+      case "create":
+        return await this.runCreateStatement(statement);
+    }
   }
 
   private async getTable(name: string): Promise<Table> {
@@ -122,31 +148,6 @@ export class Node {
       attributes: table.attributes,
       items: response,
     };
-  }
-
-  public async run(statemnts: AST | AST[]) {
-    if (Array.isArray(statemnts)) {
-      await Promise.all(
-        statemnts.map(async (statement: AST) => await this.run(statement))
-      );
-    } else {
-      return await this.runStatement(statemnts);
-    }
-  }
-
-  public async runStatement(statement: AST) {
-    switch (statement.type) {
-      case "select":
-        return await this.runSelectStatement(statement);
-      case "insert":
-        return await this.runInsertStatement(statement);
-      case "update":
-        return await this.runUpdateStatement(statement);
-      case "delete":
-        return await this.runDeleteStatement(statement);
-      case "create":
-        return await this.runCreateStatement(statement);
-    }
   }
 
   private async runInsertStatement(statement: Insert_Replace) {
@@ -240,151 +241,39 @@ export class Node {
         ...table.attributes,
       };
 
-      if (!joinedTable.items || !table.items) {
+      if (!joinedTable.items || !table || !table.items) {
         continue;
       }
 
-      const newItems: { [key: string]: any }[] = [];
+      // Split workload into chunks
+      const chunkSize = 1000;
+      const chunks = joinedTable.items.reduce((resultArray, item, index) => {
+        const chunkIndex = Math.floor(index / chunkSize);
 
-      // Left join
-      if (from[i].join && from[i].join === "LEFT JOIN") {
-        for (const leftTable of joinedTable.items) {
-          let found = false;
-          for (const rightTable of table.items) {
-            const combined = { ...leftTable, ...rightTable }; // TODO: Improve performance
-            const leftValue = this.getFilterValue(
-              keyLookupTable,
-              combined,
-              from[i].on.left
-            );
-            const rightValue = this.getFilterValue(
-              keyLookupTable,
-              combined,
-              from[i].on.right
-            );
-            if (leftValue === rightValue) {
-              newItems.push(combined);
-              found = true;
-            }
-          }
-
-          if (!found) {
-            newItems.push(leftTable);
-          }
-        }
-      } else if (from[i].join && from[i].join === "INNER JOIN") {
-        for (const leftTable of joinedTable.items) {
-          for (const rightTable of table.items) {
-            const combined = { ...leftTable, ...rightTable }; // TODO: Improve performance
-            const leftValue = this.getFilterValue(
-              keyLookupTable,
-              combined,
-              from[i].on.left
-            );
-            const rightValue = this.getFilterValue(
-              keyLookupTable,
-              combined,
-              from[i].on.right
-            );
-            if (leftValue === rightValue) {
-              newItems.push({
-                ...leftTable,
-                ...rightTable,
-              });
-            }
-          }
-        }
-      } else if (from[i].join && from[i].join === "RIGHT JOIN") {
-        for (const rightTable of table.items) {
-          let found = false;
-          for (const leftTable of joinedTable.items) {
-            const combined = { ...leftTable, ...rightTable }; // TODO: Improve performance
-            const leftValue = this.getFilterValue(
-              keyLookupTable,
-              combined,
-              from[i].on.left
-            );
-            const rightValue = this.getFilterValue(
-              keyLookupTable,
-              combined,
-              from[i].on.right
-            );
-            if (leftValue === rightValue) {
-              newItems.push({
-                ...leftTable,
-                ...rightTable,
-              });
-              found = true;
-            }
-          }
-
-          if (!found) {
-            newItems.push(rightTable);
-          }
-        }
-      } else if (from[i].join && from[i].join === "FULL JOIN") {
-        for (const leftTable of joinedTable.items) {
-          let found = false;
-          for (const rightTable of table.items) {
-            const combined = { ...leftTable, ...rightTable }; // TODO: Improve performance
-            const leftValue = this.getFilterValue(
-              keyLookupTable,
-              combined,
-              from[i].on.left
-            );
-            const rightValue = this.getFilterValue(
-              keyLookupTable,
-              combined,
-              from[i].on.right
-            );
-            if (leftValue === rightValue) {
-              newItems.push({
-                ...leftTable,
-                ...rightTable,
-              });
-              found = true;
-            }
-          }
-
-          if (!found) {
-            newItems.push(leftTable);
-          }
+        if (!resultArray[chunkIndex]) {
+          resultArray[chunkIndex] = [];
         }
 
-        for (const rightTable of table.items) {
-          let found = false;
-          for (const leftTable of joinedTable.items) {
-            const combined = { ...leftTable, ...rightTable }; // TODO: Improve performance
-            const leftValue = this.getFilterValue(
+        resultArray[chunkIndex].push(item);
+
+        return resultArray;
+      }, [] as any[]);
+
+      joinedTable.items = (
+        await Promise.all(
+          chunks.map(async (chunk: any[]) => {
+            if (!table.items) return [];
+            return await joinThread(
+              chunk,
+              table.items,
+              from[i].on.left,
+              from[i].on.right,
               keyLookupTable,
-              combined,
-              from[i].on.left
+              from[i].join
             );
-            const rightValue = this.getFilterValue(
-              keyLookupTable,
-              combined,
-              from[i].on.right
-            );
-            if (leftValue === rightValue) {
-              found = true;
-            }
-          }
-
-          if (!found) {
-            newItems.push(rightTable);
-          }
-        }
-
-      } else {
-        // Cross join
-        for (const item1 of joinedTable.items) {
-          for (const item2 of table.items) {
-            newItems.push({ ...item1, ...item2 });
-          }
-        }
-      }
-
-      joinedTable.items = newItems;
+          })
+        )
+      ).flat();
     }
 
     if (!joinedTable || !joinedTable.items) {
@@ -485,8 +374,6 @@ export class Node {
         }
       }
     }
-
-    console.dir(items, { depth: null });
 
     const buffer = Buffer.alloc(this.database.getTableLength(tableName));
     let offset = 0;
