@@ -1,5 +1,5 @@
 import readline from "readline";
-import { Node } from "./services/node";
+import { Node } from "./node";
 import { AST, Parser } from "node-sql-parser";
 
 const node = new Node("blog_db");

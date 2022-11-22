@@ -1,13 +1,8 @@
-import { getValue } from "../../helpers";
+import { getValue } from "./helpers";
 
-export const join = (
-  leftTable: any[],
-  rightTable: any[],
-  leftKey: any,
-  rightKey: any,
-  keyLookupTable: any,
-  type?: string
-) => {
+export const join = (options: any) => {
+  const { leftTable, rightTable, leftKey, rightKey, keyLookupTable, type } =
+    options;
   const newItems = [];
 
   if (type) {

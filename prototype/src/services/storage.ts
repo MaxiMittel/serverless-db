@@ -67,7 +67,6 @@ export class StorageService {
   }
 
   async deleteBytes(key: string, start: number, end: number) {
-    console.log("Deleting bytes", start, end);
     const content = await this.readObject(key);
     const buffer = await this.streamToBuffer(content);
 

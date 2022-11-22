@@ -7,13 +7,22 @@ import {
   Select,
   Update,
 } from "node-sql-parser";
-import { joinThread } from "../workers/join/thread";
-import { Database, DatabaseType, Table } from "./database";
-import { StorageService } from "./storage";
+import { filterAndProject, filterItem } from "./condition";
+import { join } from "./join";
+import { Database, DatabaseType, Table } from "./services/database";
+import { lambdaFilterHandler, lambdaJoinHandler } from "./services/lambda";
+import { socketfilterHandler, socketJoinHandler } from "./services/socket";
+import { StorageService } from "./services/storage";
 
 type KeyOffset = {
   [key: string]: number;
 };
+
+const MIN_CHUNK_SIZE = 1;
+const WORKER_COUNT = 2;
+const WORKER_TYPE: string = "socket";
+const LAMBDA_MEMORY = 256;
+const workers = ["", "http://localhost:3000"];
 
 export class Node {
   offsetLookupTable: KeyOffset = {};
@@ -214,6 +223,7 @@ export class Node {
 
   private async runSelectStatement(statement: Select) {
     const from = statement.from;
+    console.dir(statement, { depth: null });
 
     if (!from) {
       throw new Error("No table specified");
@@ -245,89 +255,64 @@ export class Node {
         continue;
       }
 
-      // Split workload into chunks
-      const chunkSize = 1000;
-      const chunks = joinedTable.items.reduce((resultArray, item, index) => {
-        const chunkIndex = Math.floor(index / chunkSize);
+      const chunks = this.split(joinedTable.items);
 
-        if (!resultArray[chunkIndex]) {
-          resultArray[chunkIndex] = [];
-        }
+      const results = await Promise.all(
+        chunks.map(async (chunk: any[], index: number) => {
+          const data = {
+            leftTable: chunk,
+            rightTable: table.items,
+            leftKey: from[i].on.left,
+            rightKey: from[i].on.right,
+            keyLookupTable: keyLookupTable,
+            type: from[i].join,
+          };
 
-        resultArray[chunkIndex].push(item);
+          if (index === 0) return join(data);
 
-        return resultArray;
-      }, [] as any[]);
+          switch (WORKER_TYPE) {
+            case "socket":
+              return await socketJoinHandler(workers[index], data);
+            case "lambda":
+              return await lambdaJoinHandler(LAMBDA_MEMORY, data);
+          }
+        })
+      );
 
-      joinedTable.items = (
-        await Promise.all(
-          chunks.map(async (chunk: any[]) => {
-            if (!table.items) return [];
-            return await joinThread(
-              chunk,
-              table.items,
-              from[i].on.left,
-              from[i].on.right,
-              keyLookupTable,
-              from[i].join
-            );
-          })
-        )
-      ).flat();
+      joinedTable.items = results.flat();
     }
 
     if (!joinedTable || !joinedTable.items) {
       throw new Error("No items found");
     }
 
-    let items = joinedTable.items;
+    // TODO: Check if where or projections is not "*" clause is defined
 
-    if (statement.where) {
-      items = items.filter((item) =>
-        this.filterItems(keyLookupTable, item, statement.where)
-      );
-    }
+    const chunks = this.split(joinedTable.items);
 
-    // Project columns
-    if (!statement.columns || statement.columns === "*") {
-      return items;
-    } else {
-      return items.map((item) => {
-        let projectedItem: { [key: string]: any } = {};
+    const results = await Promise.all(
+      chunks.map(async (chunk: any[], index: number) => {
+        const data = {
+          items: chunk,
+          keyLookupTable: keyLookupTable,
+          where: statement.where,
+          columns: statement.columns,
+        };
 
-        for (const column of statement.columns) {
-          switch (column.expr.type) {
-            case "column_ref":
-              if (column.as) {
-                projectedItem[column.as] =
-                  item[keyLookupTable[column.expr.column]];
-              } else {
-                projectedItem[column.expr.column] =
-                  item[keyLookupTable[column.expr.column]];
-              }
-              break;
-            case "number":
-              if (column.as) {
-                projectedItem[column.as] = parseInt(column.expr.value);
-              } else {
-                projectedItem[column.expr.value] = parseInt(column.expr.value);
-              }
-              break;
-            case "string":
-            case "single_quote_string":
-              if (column.as) {
-                projectedItem[column.as] = column.expr.value;
-              } else {
-                projectedItem[column.expr.value] = column.expr.value;
-              }
-              break;
-            default:
-              break;
-          }
+        if (index === 0) return filterAndProject(data);
+
+        switch (WORKER_TYPE) {
+          case "socket":
+            return await socketfilterHandler(workers[index], data);
+          case "lambda":
+            return await lambdaFilterHandler(LAMBDA_MEMORY, data);
         }
-        return projectedItem;
-      });
-    }
+      })
+    );
+
+    joinedTable.items = results.flat();
+
+    return joinedTable.items;
   }
 
   private async runUpdateStatement(statement: Update) {
@@ -363,7 +348,7 @@ export class Node {
 
     if (statement.where) {
       items = items.filter((item) =>
-        this.filterItems(keyLookupTable, item, statement.where)
+        filterItem(keyLookupTable, item, statement.where)
       );
     }
 
@@ -448,7 +433,7 @@ export class Node {
 
     if (statement.where) {
       items = items.filter((item) =>
-        this.filterItems(keyLookupTable, item, statement.where)
+        filterItem(keyLookupTable, item, statement.where)
       );
     }
 
@@ -508,65 +493,18 @@ export class Node {
     await this.database.addTable(table);
   }
 
-  private getFilterValue(keyLookupTable: any, item: any, filter: any) {
-    switch (filter.type) {
-      case "column_ref":
-        if (filter.table) {
-          return item[keyLookupTable[`${filter.table}.${filter.column}`]];
-        }
-        return item[keyLookupTable[filter.column]];
-      case "number":
-        return parseInt(filter.value);
-      case "string":
-      case "single_quote_string":
-        return filter.value;
-      default:
-        break;
-    }
-  }
+  // Split workload on array accross maxWorkers threads with MIN_CHUNK_SIZE
+  private split(items: any[]): any[][] {
+    const chunkSize = Math.max(
+      Math.ceil(items.length / WORKER_COUNT),
+      MIN_CHUNK_SIZE
+    );
 
-  private filterItems(keyLookupTable: any, item: any, filter: any): boolean {
-    switch (filter.type) {
-      case "binary_expr":
-        const leftValue = this.getFilterValue(
-          keyLookupTable,
-          item,
-          filter.left
-        );
-        const rightValue = this.getFilterValue(
-          keyLookupTable,
-          item,
-          filter.right
-        );
-
-        switch (filter.operator) {
-          case "AND":
-            return (
-              this.filterItems(keyLookupTable, item, filter.left) &&
-              this.filterItems(keyLookupTable, item, filter.right)
-            );
-          case "OR":
-            return (
-              this.filterItems(keyLookupTable, item, filter.left) ||
-              this.filterItems(keyLookupTable, item, filter.right)
-            );
-          case "=":
-            return leftValue === rightValue;
-          case "!=":
-            return leftValue !== rightValue;
-          case ">":
-            return leftValue > rightValue;
-          case "<":
-            return leftValue < rightValue;
-          case ">=":
-            return leftValue >= rightValue;
-          case "<=":
-            return leftValue <= rightValue;
-          default:
-            return false;
-        }
-      default:
-        return false;
+    const chunks: any[][] = [];
+    for (let i = 0; i < items.length; i += chunkSize) {
+      chunks.push(items.slice(i, i + chunkSize));
     }
+
+    return chunks;
   }
 }
