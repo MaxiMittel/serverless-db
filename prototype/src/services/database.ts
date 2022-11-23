@@ -67,6 +67,7 @@ export class Database {
   }
 
   public getTable(name: string) {
+    console.log(this.tables);
     const table = this.tables.find((table) => table.name === name);
     if (!table) throw new Error(`Table ${name} does not exist`);
     return table;

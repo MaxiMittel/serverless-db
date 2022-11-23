@@ -18,7 +18,7 @@ type KeyOffset = {
   [key: string]: number;
 };
 
-const MIN_CHUNK_SIZE = 1;
+const MIN_CHUNK_SIZE = 1000;
 const WORKER_COUNT = 2;
 const WORKER_TYPE: string = "socket";
 const LAMBDA_MEMORY = 256;
@@ -32,10 +32,9 @@ export class Node {
   constructor(database: string) {
     this.database = new Database(database);
     this.storageService = new StorageService();
-    this.init();
   }
 
-  private async init() {
+  public async init() {
     await this.initDatabase();
     await this.initOffsetLookupTable();
   }
@@ -223,7 +222,6 @@ export class Node {
 
   private async runSelectStatement(statement: Select) {
     const from = statement.from;
-    console.dir(statement, { depth: null });
 
     if (!from) {
       throw new Error("No table specified");
