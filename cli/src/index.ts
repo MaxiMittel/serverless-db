@@ -1,6 +1,6 @@
 import readline from "readline";
 import { Parser } from "node-sql-parser";
-import axios from "axios";
+import net from "net";
 
 const main = async () => {
   if (process.argv.length < 3) {
@@ -13,6 +13,20 @@ const main = async () => {
 
   console.log(`${hostname}::${database}`);
 
+  var client = new net.Socket();
+  client.connect(4000, "127.0.0.1", function () {
+    console.log("Connected");
+  });
+
+  client.on("data", function (data: any) {
+    console.log("Received: " + data);
+    client.destroy(); // kill client after server's response
+  });
+
+  client.on("close", function () {
+    console.log("Connection closed");
+  });
+
   const rl = readline.createInterface({
     input: process.stdin,
     output: process.stdout,
@@ -22,12 +36,9 @@ const main = async () => {
     const sqlParser = new Parser();
     const parsed = sqlParser.astify(input);
 
-    const response = await axios.post(`${hostname}/query`, {
-      database,
-      query: parsed,
-    });
+    client.write(JSON.stringify(parsed));
 
-    console.table(response.data);
+    //console.table(response.data);
   });
 };
 
