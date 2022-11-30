@@ -36,7 +36,7 @@ const main = async () => {
     const sqlParser = new Parser();
     const parsed = sqlParser.astify(input);
 
-    client.write(JSON.stringify(parsed));
+    client.write(JSON.stringify({ name: "Maxi", age: 21 }));
 
     //console.table(response.data);
   });
